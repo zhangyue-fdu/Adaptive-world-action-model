@@ -1,0 +1,112 @@
+#!/bin/bash
+# =============================================================================
+# LSF 资源与日志路径（#BSUB 必须为字面量）
+# =============================================================================
+#BSUB -J motus_build_fd_dataset
+#BSUB -q gpu-sme-wangzr
+#BSUB -n 8
+#BSUB -R "span[ptile=8]"
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -o /work/sme-wangr/logs/Motus/build_fd_dataset_%J.out   # 与下方 LSF_LOG_DIR 一致
+#BSUB -e /work/sme-wangr/logs/Motus/build_fd_dataset_%J.err
+
+cd "$LS_SUBCWD" || exit 1
+
+PROJECT_ROOT="/work/sme-wangr/Motus"
+
+LSF_LOG_DIR="/work/sme-wangr/logs/Motus"
+
+CUDA_VISIBLE_DEVICES="0"
+OMP_NUM_THREADS="8"
+
+# =============================================================================
+# 环境与依赖（集群路径按你环境改）
+# =============================================================================
+
+cd "$PROJECT_ROOT" || exit 1
+mkdir -p logs/Motus
+mkdir -p "${LSF_LOG_DIR}"
+
+module load python/anaconda3/2022.10 2>/dev/null || echo "Warning: Could not load anaconda3 module"
+module load cmake/3.25.2 2>/dev/null || echo "Warning: Could not load cmake module"
+
+if [ -f "/share/apps/anaconda3/etc/profile.d/conda.sh" ]; then
+    source /share/apps/anaconda3/etc/profile.d/conda.sh
+    conda activate motus || echo "Warning: conda activate motus failed, will try PATH fallback"
+fi
+
+PYTHON_PATH=$(which python)
+if [[ "$PYTHON_PATH" != *"motus"* ]]; then
+    if [ -d "/work/sme-wangr/.conda/envs/motus" ]; then
+        export PATH="/work/sme-wangr/.conda/envs/motus/bin:$PATH"
+        PYTHON_PATH=$(which python)
+    fi
+fi
+
+PYTHON_PATH=$(which python)
+if [[ "$PYTHON_PATH" != *"motus"* ]]; then
+    echo "ERROR: Conda environment 'motus' not activated correctly"
+    echo "Python path: $PYTHON_PATH"
+    exit 1
+fi
+
+export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH}"
+export OMP_NUM_THREADS
+export CUDA_VISIBLE_DEVICES
+
+export NCCL_DEBUG=INFO
+export NCCL_IB_DISABLE=0
+export NCCL_IB_RETRY_CNT=7
+export NCCL_IB_TIMEOUT=23
+export NCCL_ASYNC_ERROR_HANDLING=1
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+export TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC=1800
+
+# =============================================================================
+# 生成配置（按需改这些变量）
+# =============================================================================
+
+DATASET_DIR="/work/sme-wangr/Motus/Dataset/robotwin_dataset"
+OUT_DIR="/work/sme-wangr/Motus/Dataset/robotwin_fd_dataset_all_80k"
+CKPT="/work/sme-wangr/Motus/checkpoints/robotwin/robotwin_20260329_050331/checkpoint_step_80000"
+WAN_PATH="/work/sme-wangr/Motus/checkpoints/pretrained_models/Wan2.2-TI2V-5B"
+VLM_PATH="/work/sme-wangr/Motus/checkpoints/pretrained_models/Qwen3-VL-2B-Instruct"
+MOTUS_YAML="/work/sme-wangr/Motus/configs/robotwin.yaml"
+
+echo "=========================================="
+echo "Build RobotWin FD Dataset (data/robotwin2/build_fd_augmented_data.lsf)"
+echo "=========================================="
+echo "Job ID: $LSB_JOBID"
+echo "Host: $(hostname)"
+echo "Working Directory: $PROJECT_ROOT"
+echo "Python: $PYTHON_PATH"
+echo "CUDA Devices: $CUDA_VISIBLE_DEVICES"
+echo "DATASET_DIR: $DATASET_DIR"
+echo "OUT_DIR: $OUT_DIR"
+echo "CKPT: $CKPT"
+echo "WAN_PATH: $WAN_PATH"
+echo "VLM_PATH: $VLM_PATH"
+echo "MOTUS_YAML: $MOTUS_YAML"
+echo "=========================================="
+
+python "/work/sme-wangr/Motus/data/robotwin2/build_robotwin_fd_augmented_dataset.py" \
+  --dataset_dir "$DATASET_DIR" \
+  --out_dir "$OUT_DIR" \
+  --motus_yaml "$MOTUS_YAML" \
+  --n_clean_per_task 9999 \
+  --n_random_per_task 9999 \
+  --seed 0 \
+  --ckpt "$CKPT" \
+  --wan_path "$WAN_PATH" \
+  --vlm_path "$VLM_PATH" \
+  --num_inference_steps 10 \
+  --device cuda \
+  --log_every 20 \
+  --save_predicted_tokens 1 \
+  --save_predicted_frames 0 \
+  --save_und_tokens 1
+
+
+echo "=========================================="
+echo "Build completed at $(date)"
+echo "=========================================="
